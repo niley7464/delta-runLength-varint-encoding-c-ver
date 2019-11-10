@@ -7,8 +7,6 @@ static const uint32_t matrixNumber = 10000;
 
 // 4 kb = 4096 byte = 1028 * 4 byte
 
-void saveBlock(FILE* fp, uint8_t* tags, uint8_t* tuples, int* total, int* number, uint8_t* tag, int* tag_idx);
-
 int main(){
     /* genarate random matrix*/
 
@@ -109,86 +107,66 @@ int main(){
 
     fp = fopen("length.bin","rb");
     sp = fopen("varint.bin","wb");
-    //fseek(sp,160,SEEK_SET); // 160byte (5 * uint32_t) 남겨놓기
-    //printf("file pointer position : %ld\n",ftell(sp));
 
     if(fp==NULL){
         printf("fp null pointer");
         return -1;
     }
 
-    // count_tuple , tuple_idx 합치기
+    uint32_t buffer; // input save buffer
+    uint8_t* varintMatrix = (uint8_t*) malloc(sizeof(uint8_t) * 4096);
 
-    uint32_t buffer;
-    int count_tag = 0; // tag를 저장하는데 쓰이는 uint8_t의 개수
-    int count_tuple = 822; // 총 tuple이 4096개 넘으면 block full // number of tuples, tags 로 이미 822 채워둠
+    int count_tag = 0; // check one tag byte is full
+    int tag_idx = 0; // save tag index in varintMatrix
+    int block_idx = 0; // index for varintMatrix
+    int flag = 0;
 
-    uint8_t* tagMatrix = (uint8_t*) malloc(sizeof(uint32_t) * 818); // maximum number of tuple which can be in one block
-    uint8_t* tupleMatrix = (uint8_t*) malloc(sizeof(uint8_t) * 3272);
-    int tuple_idx = 0;
-
-    uint8_t tag=0; // real tag
-    int tag_idx = 0; // tag Matrix에 넣을 때 index
-
-    while(fread(&buffer,sizeof(uint32_t),1,fp)!=0){ // 4096 넘는지 중간 중간 체크!
+    while(fread(&buffer,sizeof(uint32_t),1,fp)!=0){
         //printf("input : %x\n",buffer);
-        
-        uint8_t b0 = buffer;
-        uint8_t b1 = buffer >> 8;
-        uint8_t b2 = buffer >> 16;
-        uint8_t b3 = buffer >> 24;
 
-        if(buffer <= 0xFF){
-            if(count_tuple + 1 >= 4096) saveBlock(sp,tagMatrix,tupleMatrix,&count_tag,&count_tuple,&tag,&tag_idx);
-     
-            count_tuple += 1;
-            tag <<=2;
+        uint8_t b[4] = {buffer, buffer >> 8, buffer >> 16, buffer >> 24};
 
-            tupleMatrix[tuple_idx++] = b0;
+        if(buffer <= 0xFF) flag = 1;
+        else if(buffer <= 0xFFFF) flag = 2;
+        else if(buffer <= 0xFFFFFF) flag = 3;
+        else flag = 4;
+
+        int newTagByte = ((count_tag++)%4==0);
+
+        // save 4kb if block is full
+        if(block_idx + flag + newTagByte >= 4096){
+            // block change
+            // for(int i = 0 ; i < 4096 ; i++) printf("%x\n",varintMatrix[i]);
+            fwrite(varintMatrix,sizeof(uint8_t),4096,sp);
+            block_idx=0;
+            tag_idx = 0;
+            count_tag = 1;
+            newTagByte = 1;
+            // printf("Block Change.\n");
         }
-        else if(buffer <= 0xFFFF){
-            if(count_tuple + 2 >= 4096) saveBlock(sp,tagMatrix,tupleMatrix,&count_tag,&count_tuple,&tag,&tag_idx);
-  
-            count_tuple += 2;
-            tag <<= 2;
-            tag += 1;
 
-            tupleMatrix[tuple_idx++] = b0;
-            tupleMatrix[tuple_idx++] = b1;
-        }
-        else if(buffer <= 0xFFFFFF){
-            if(count_tuple + 3 >= 4096) saveBlock(sp,tagMatrix,tupleMatrix,&count_tag,&count_tuple,&tag,&tag_idx);
-
-            count_tuple += 3;
-            tag <<= 2;
-            tag += 2;
-
-            tupleMatrix[tuple_idx++] = b0;
-            tupleMatrix[tuple_idx++] = b1;
-            tupleMatrix[tuple_idx++] = b2;
+        if(newTagByte){ // 새로운 태그 바이트
+            tag_idx = block_idx++;
+            varintMatrix[tag_idx] = (flag-1);
         }
         else{
-            if(count_tuple + 4 >= 4096) saveBlock(sp,tagMatrix,tupleMatrix,&count_tag,&count_tuple,&tag,&tag_idx);
-
-            count_tuple += 4;
-            tag <<= 2;
-            tag += 3;
-           
-            tupleMatrix[tuple_idx++] = b0;
-            tupleMatrix[tuple_idx++] = b1;
-            tupleMatrix[tuple_idx++] = b2;  
-            tupleMatrix[tuple_idx++] = b3;
+            varintMatrix[tag_idx] <<= 2;
+            varintMatrix[tag_idx] += (flag-1);
         }
-        if((++count_tag)%4 == 0){
-            tagMatrix[tag_idx++] = tag;
-            tag = 0;
+
+        for(int i = 0 ; i < flag ; i++){
+            varintMatrix[block_idx++] = b[i];
         }
     }
 
-    saveBlock(sp,tagMatrix,tupleMatrix,&count_tag,&count_tuple,&tag,&tag_idx);
+    //for(int i = 0 ; i < 4096 ; i++) printf("%x\n",varintMatrix[i]);
+    fwrite(varintMatrix,sizeof(uint8_t),4096,sp);
 
     fclose(fp);
     fclose(sp);
+
+    //printf("end varint encoding\n");
+
 
     /* run length decoding */
     fp = fopen("length.bin","rb");
@@ -225,30 +203,4 @@ int main(){
     }
 
     //fwrite(deltaMatrix,sizeof(uint32_t),(size_t)matrixNumber,sp);
-
-    printf("All done.\n");
-}
-
-void saveBlock(FILE* fp, uint8_t* tags, uint8_t* tuples, int* total, int* number, uint8_t* tag, int* tag_idx){
-    fwrite(&total,sizeof(int),1,fp);
-
-    // for(int i = 0 ; i < *total ; i++){
-    //     printf("%x\t",tags[i]);
-    // }
-
-    // for(int i = 0 ; i < *number ; i++){
-    //     printf("%x\n", tuples[i]);
-    // }
-
-    fwrite(tags,sizeof(uint8_t),*total,fp);
-    fwrite(tuples,sizeof(uint8_t),*number,fp);
-
-    // 4kb 빈공간 아무값 or 0 채워넣기
-
-    *total = 822;
-    *number = 0;
-    *tag = 0;
-    *tag_idx = 0;
-
-    printf("Block write done\n");
 }
