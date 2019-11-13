@@ -20,12 +20,6 @@ int main(){
     //     printf("%x\n",t);
     // }
 
-    FILE *fp = fopen("matrix.bin","rb");
-    if(fp==NULL) {
-        printf("fp null pointer\n");
-        return -1;
-    }
-
     uint32_t* originMatrix = NULL;
     uint32_t* deltaMatrix = NULL;
     uint32_t* runLengthMatrix = NULL;
@@ -40,6 +34,10 @@ int main(){
     // }
 
     /* delta encoding */
+
+    FILE *fp = fopen("matrix.bin","rb");
+    FILE *sp = fopen("buffer.bin", "wb");
+
     uint32_t last = 0;
     for(int i = 0 ; i < matrixNumber ; i++){
         uint32_t current = originMatrix[i];
@@ -47,19 +45,10 @@ int main(){
         last = current;
     } 
 
-    // printf("end delta encoding.\n");
-
-    fclose(fp);
-
-    /* saving delta matrix*/
-    FILE *sp = fopen("buffer.bin", "wb");
-    if(sp==NULL) {
-        printf("sp null pointer");
-        return -1;
-    }
     fwrite(deltaMatrix,sizeof(uint32_t),(size_t)matrixNumber,sp);
-    fclose(sp);
+
     fclose(fp);
+    fclose(sp);
 
     // printf("saving delta decoding result.\n");
 
@@ -136,7 +125,7 @@ int main(){
         // save 4kb if block is full
         if(block_idx + flag + newTagByte >= 4096){
             // block change
-            // for(int i = 0 ; i < 4096 ; i++) printf("%x\n",varintMatrix[i]);
+            //for(int i = 0 ; i < 4096 ; i++) printf("%x\n",varintMatrix[i]);
             fwrite(varintMatrix,sizeof(uint8_t),4096,sp);
             block_idx=0;
             tag_idx = 0;
@@ -154,9 +143,7 @@ int main(){
             varintMatrix[tag_idx] += (flag-1);
         }
 
-        for(int i = 0 ; i < flag ; i++){
-            varintMatrix[block_idx++] = b[i];
-        }
+        for(int i = 0 ; i < flag ; i++) varintMatrix[block_idx++] = b[i];
     }
 
     //for(int i = 0 ; i < 4096 ; i++) printf("%x\n",varintMatrix[i]);
@@ -167,6 +154,67 @@ int main(){
 
     //printf("end varint encoding\n");
 
+    /* varint decoding */
+    fp = fopen("varint.bin","rb");
+    sp = fopen("decoded_varint.bin","wb");
+
+    //uint8_t* varintMatrix = (uint8_t*) malloc(sizeof(uint8_t) * 4096);
+    int idx,sum;
+    uint8_t tag;
+    
+    // 4kb block 단위로 계속 읽어오기
+    while(fread(varintMatrix,sizeof(uint8_t),4096,fp)!=0){
+        // for(int i = 0 ; i < 4096 ; i++){
+        //     printf("%x\n",varintMatrix[i]);
+        // }
+        idx = 0;
+        while(true){
+        tag = varintMatrix[idx++];
+        int tagMatrix[4] = {(0xC0&tag)>>6, (0x30&tag)>>4,(0x0C&tag)>>2, 0x03&tag };
+        sum = ((0x03&tag) + ((0x0C&tag)>>2) + ((0x30&tag)>>4) + ((0xC0&tag)>>6) )+ 4; // 앞으로 가져와야 할 8kb 블록의 개수
+        //printf("%d\n",sum);
+        if(idx + sum >= 4096){
+            //특수 케이스
+            if(idx + tagMatrix[0] + 1 < 4096){
+                buffer = 0;
+                for(int j = 0 ; j <= tagMatrix[0] ; j++){
+                    buffer |= varintMatrix[idx++]<<(8*j);
+                }
+                //printf("%x\n",buffer);
+                fwrite(&buffer,sizeof(uint32_t),1,sp);
+            }
+            if(idx + tagMatrix[1] + 1 < 4096){
+                buffer = 0;
+                for(int j = 0 ; j <= tagMatrix[1] ; j++){
+                    buffer |= varintMatrix[idx++]<<(8*j);
+                }
+                //printf("%x\n",buffer);
+                fwrite(&buffer,sizeof(uint32_t),1,sp);
+            }
+            if(idx + tagMatrix[2] + 1 < 4096){
+                buffer = 0;
+                for(int j = 0 ; j <= tagMatrix[2] ; j++){
+                    buffer |= varintMatrix[idx++]<<(8*j);
+                }
+                //printf("%x\n",buffer);
+                fwrite(&buffer,sizeof(uint32_t),1,sp);
+            }
+            break;
+        }
+        else{
+            for(int i = 0 ; i < 4 ; i++){
+                buffer = 0;
+                for(int j = 0 ; j <= tagMatrix[i] ; j++){
+                    buffer |= varintMatrix[idx++]<<(8*j);
+                }
+                //printf("%x\n",buffer);
+                fwrite(&buffer,sizeof(uint32_t),1,sp);
+            }
+        }
+        }
+    }
+    fclose(fp);
+    fclose(sp);
 
     /* run length decoding */
     fp = fopen("length.bin","rb");
@@ -194,13 +242,13 @@ int main(){
     deltaMatrix = (uint32_t *)malloc(sizeof(uint32_t) * matrixNumber);
     fread(deltaMatrix,sizeof(uint32_t),(size_t)matrixNumber,fp);
     
-    
     last = 0;
     for(int i = 0 ; i < matrixNumber ; i++){
         uint32_t delta = deltaMatrix[i];
         deltaMatrix[i] = delta+last;
         last = deltaMatrix[i];
+        printf("%x\n",deltaMatrix[i]);
     }
 
-    //fwrite(deltaMatrix,sizeof(uint32_t),(size_t)matrixNumber,sp);
+    fwrite(deltaMatrix,sizeof(uint32_t),(size_t)matrixNumber,sp);
 }
